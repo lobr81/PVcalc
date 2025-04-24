@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PV-Anlage Wirtschaftlichkeitsrechner</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/17.0.2/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/17.0.2/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.1.9/Recharts.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        .slider-container { display: flex; align-items: center; }
+        .slider-value { width: 70px; text-align: right; font-weight: 500; }
+        .tab-active { background-color: #3b82f6; color: white; }
+        .tab-inactive { background-color: #e5e7eb; color: #374151; }
+        @media print { .no-print { display: none !important; } }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root" class="container mx-auto px-4 py-8 max-w-6xl"></div>
+
+    <script>
+        // Starten, wenn Recharts geladen ist
+        window.onload = function() {
+            const {
+                LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+                ResponsiveContainer, ReferenceLine
+            } = Recharts;
+
+            // PV Wirtschaftlichkeitsrechner Hauptkomponente
+            function PVCalculator() {
+                // Szenariodaten
+                const scenarios = {
+                    v1: {
+                        name: "V1 (100% Produktion)",
+                        desc: "Basisszenario mit optimalen Bedingungen",
+                        defaultSelfUsePrice: 0.20,
+                        defaultFeedInPrice: 0.06,
+                        without: {
+                            netInvestment: 46350,
+                            selfConsumption: 20770,
+                            gridFeedIn: 12730,
+                            annualCosts: 1500
+                        },
+                        withBattery: {
+                            netInvestment: 58050,
+                            selfConsumption: 24958,
+                            gridFeedIn: 8543,
+                            annualCosts: 1500
+                        }
+                    },
+                    v2: {
+                        name: "V2 (Markt-Bezugspreis)",
+                        desc: "Markt-Bezugspreis 0.30 CHF/kWh ohne Vergünstigung",
+                        defaultSelfUsePrice: 0.30,
+                        defaultFeedInPrice: 0.06,
+                        without: {
+                            netInvestment: 46350,
+                            selfConsumption: 20770,
+                            gridFeedIn: 12730,
+                            annualCosts: 1500
+                        },
+                        withBattery: {
+                            netInvestment: 58050,
+                            selfConsumption: 24958,
+                            gridFeedIn: 8543,
+                            annualCosts: 1500
+                        }
+                    },
+                    v3: {
+                        name: "V3 (90% Produktion)",
+                        desc: "Reduzierte Stromproduktion (90% der Kilowatt-Peak)",
+                        defaultSelfUsePrice: 0.20,
+                        defaultFeedInPrice: 0.06,
+                        without: {
+                            netInvestment: 46350,
+                            selfConsumption: 18693,
+                            gridFeedIn: 11457,
+                            annualCosts: 1500
+                        },
+                        withBattery: {
+                            netInvestment: 58050,
+                            selfConsumption: 22462,
+                            gridFeedIn: 7688,
+                            annualCosts: 1500
+                        }
+                    },
+                    v4: {
+                        name: "V4 (80% Produktion)",
+                        desc: "Reduzierte Stromproduktion (80% der Kilowatt-Peak)",
+                        defaultSelfUsePrice: 0.20,
+                        defaultFeedInPrice: 0.06,
+                        without: {
+                            netInvestment: 46350,
+                            selfConsumption: 16616,
+                            gridFeedIn: 10184,
+                            annualCosts: 1500
+                        },
+                        withBattery: {
+                            netInvestment: 58050,
+                            selfConsumption: 19966,
+                            gridFeedIn: 6834,
+                            annualCosts: 1500
+                        }
+                    }
+                };
+
+                // Vordefinierte Preisentwicklungen
+                const priceScenarios = [
+                    { name: "Stabile Preise", selfUseChange: 0, feedInChange: 0 },
+                    { name: "Moderate Steigerung", selfUseChange: 3, feedInChange: 1 },
+                    { name: "Starke Steigerung", selfUseChange: 5, feedInChange: 2 },
+                    { name: "Sinkende Einspeisevergütung", selfUseChange: 4, feedInChange: -3 }
+                ];
+
+                // States
+                const [activeTab, setActiveTab] = React.useState('v3');
+                const [duration, setDuration] = React.useState(15);
+                const [selfUsePrice, setSelfUsePrice] = React.useState(scenarios.v3.defaultSelfUsePrice);
+                const [feedInPrice, setFeedInPrice] = React.useState(scenarios.v3.defaultFeedInPrice);
+                const [selfUseChange, setSelfUseChange] = React.useState(2.0);
+                const [feedInChange, setFeedInChange] = React.useState(0.0);
+                const [chartData, setChartData] = React.useState([]);
+                const [breakEven, setBreakEven] = React.useState({ without: null, withBattery: null });
+
+                // Bei Szenariowechsel die Preisannahmen anpassen
+                React.useEffect(() => {
+                    const scenario = scenarios[activeTab];
+                    setSelfUsePrice(scenario.defaultSelfUsePrice);
+                    setFeedInPrice(scenario.defaultFeedInPrice);
+                }, [activeTab]);
+
+                // Berechnen der finanziellen Entwicklung
+                React.useEffect(() => {
+                    const scenario = scenarios[activeTab];
+
+                    // Funktion zur Berechnung des kumulativen Ertrags
+                    function calcCumulativeReturn(option, years) {
+                        const results = [];
+                        let cumulativeReturn = -option.netInvestment;
+                        let currentSelfUsePrice = selfUsePrice;
+                        let currentFeedInPrice = feedInPrice;
+
+                        for (let year = 0; year <= years; year++) {
+                            // Jahr 0 ist nur Investition
+                            if (year === 0) {
+                                results.push({
+                                    year,
+                                    cumulativeReturn,
+                                    selfUsePrice: currentSelfUsePrice,
+                                    feedInPrice: currentFeedInPrice
+                                });
+                                continue;
+                            }
+
+                            // Preise für das nächste Jahr anpassen
+                            currentSelfUsePrice *= (1 + selfUseChange / 100);
+                            currentFeedInPrice *= (1 + feedInChange / 100);
+                            currentFeedInPrice = Math.max(0, currentFeedInPrice); // nicht negativ
+
+                            // Jahresertrag berechnen
+                            const selfUseReturn = option.selfConsumption * currentSelfUsePrice;
+                            const feedInReturn = option.gridFeedIn * currentFeedInPrice;
+                            const annualReturn = selfUseReturn + feedInReturn - option.annualCosts;
+
+                            // Kumulativen Ertrag aktualisieren
+                            cumulativeReturn += annualReturn;
+
+                            results.push({
+                                year,
+                                cumulativeReturn,
+                                selfUsePrice: currentSelfUsePrice,
+                                feedInPrice: currentFeedInPrice,
+                                annualReturn
+                            });
+                        }
+
+                        return results;
+                    }
+
+                    // Berechnung für beide Optionen
+                    const withoutBatteryResults = calcCumulativeReturn(scenario.without, duration);
+                    const withBatteryResults = calcCumulativeReturn(scenario.withBattery, duration);
+
+                    // Formatieren für das Diagramm
+                    const formattedData = [];
+                    for (let i = 0; i <= duration; i++) {
+                        formattedData.push({
+                            year: i,
+                            "Ohne Batterie": Math.round(withoutBatteryResults[i].cumulativeReturn),
+                            "Mit Batterie": Math.round(withBatteryResults[i].cumulativeReturn),
+                            "EV-Preis": withoutBatteryResults[i].selfUsePrice.toFixed(2),
+                            "FE-Preis": withoutBatteryResults[i].feedInPrice.toFixed(2)
+                        });
+                    }
+                    setChartData(formattedData);
+
+                    // Berechnung der Break-Even-Punkte
+                    function findBreakEven(data) {
+                        for (let i = 0; i < data.length; i++) {
+                            if (data[i].cumulativeReturn >= 0) {
+                                if (i > 0) {
+                                    const prevYear = data[i-1];
+                                    const currentYear = data[i];
+                                    const ratio = (0 - prevYear.cumulativeReturn) / (currentYear.cumulativeReturn - prevYear.cumulativeReturn);
+                                    return (i-1) + ratio;
+                                }
+                                return i;
+                            }
+                        }
+                        return null;
+                    }
+
+                    setBreakEven({
+                        without: findBreakEven(withoutBatteryResults),
+                        withBattery: findBreakEven(withBatteryResults)
+                    });
+                }, [selfUsePrice, feedInPrice, selfUseChange, feedInChange, duration, activeTab]);
+
+                // Formatierungsfunktionen
+                const formatBreakEven = (years) => {
+                    if (years === null) return `über ${duration} Jahre`;
+                    return `${years.toFixed(1)} Jahre`;
+                };
+
+                const formatYAxis = (value) => {
+                    return `${Math.round(value / 1000)}k`;
+                };
+
+                // Tooltip für das Diagramm
+                const CustomTooltip = ({ active, payload, label }) => {
+                    if (active && payload && payload.length) {
+                        return (
+                            React.createElement('div', { className: 'bg-white p-4 border border-gray-300 rounded shadow-md' },
+                                React.createElement('p', { className: 'font-bold' }, `Jahr ${label}`),
+                                React.createElement('p', null, `Eigenverbrauchspreis: ${payload[0].payload["EV-Preis"]} CHF/kWh`),
+                                React.createElement('p', null, `Einspeisevergütung: ${payload[0].payload["FE-Preis"]} CHF/kWh`),
+                                React.createElement('p', { className: 'text-blue-600' }, `Ohne Batterie: ${payload[0].value.toLocaleString()} CHF`),
+                                payload[1] && React.createElement('p', { className: 'text-green-600' }, `Mit Batterie: ${payload[1].value.toLocaleString()} CHF`)
+                            )
+                        );
+                    }
+                    return null;
+                };
+
+                // Ergebnis am Ende der Laufzeit
+                const endResult = chartData.length > 0 ? {
+                    without: chartData[chartData.length - 1]["Ohne Batterie"],
+                    withBattery: chartData[chartData.length - 1]["Mit Batterie"]
+                } : { without: 0, withBattery: 0 };
+
+                // Batterie-Vergleichstext
+                const getBatteryComparison = () => {
+                    if (breakEven.without !== null && breakEven.withBattery !== null) {
+                        const diff = breakEven.without - breakEven.withBattery;
+                        if (diff > 0) {
+                            return `Die Batterie-Option amortisiert sich ${diff.toFixed(1)} Jahre schneller`;
+                        } else if (diff < 0) {
+                            return `Die Option ohne Batterie amortisiert sich ${Math.abs(diff).toFixed(1)} Jahre schneller`;
+                        } else {
+                            return "Beide Optionen haben die gleiche Amortisationszeit";
+                        }
+                    } else if (breakEven.without === null && breakEven.withBattery !== null) {
+                        return `Nur die Batterie-Option amortisiert sich innerhalb von ${duration} Jahren`;
+                    } else if (breakEven.without !== null && breakEven.withBattery === null) {
+                        return `Nur die Option ohne Batterie amortisiert sich innerhalb von ${duration} Jahren`;
+                    } else {
+                        return `Keine der Optionen amortisiert sich innerhalb von ${duration} Jahren`;
+                    }
+                };
+
+                // Vordefiniertes Preisszenario laden
+                const loadPriceScenario = (scenario) => {
+                    setSelfUseChange(scenario.selfUseChange);
+                    setFeedInChange(scenario.feedInChange);
+                };
+
+                // Werte zurücksetzen
+                const resetInputs = () => {
+                    const scenario = scenarios[activeTab];
+                    setSelfUsePrice(scenario.defaultSelfUsePrice);
+                    setFeedInPrice(scenario.defaultFeedInPrice);
+                    setSelfUseChange(2.0);
+                    setFeedInChange(0.0);
+                };
+
+                // Datenexport als CSV
+                const exportData = () => {
+                    const scenarioName = scenarios[activeTab].name;
+                    let csvContent = `PV-Anlage Wirtschaftlichkeitsrechner - ${scenarioName}\n`;
+                    csvContent += `Eigenverbrauchspreis: ${selfUsePrice} CHF/kWh, jährliche Änderung: ${selfUseChange}%\n`;
+                    csvContent += `Einspeisevergütung: ${feedInPrice} CHF/kWh, jährliche Änderung: ${feedInChange}%\n\n`;
+                    csvContent += "Jahr,Ohne Batterie (CHF),Mit Batterie (CHF),Eigenverbrauchspreis (CHF/kWh),Einspeisevergütung (CHF/kWh)\n";
+
+                    chartData.forEach(d => {
+                        csvContent += `<span class="math-inline">\{d\.year\},</span>{d["Ohne Batterie"]},<span class="math-inline">\{d\["Mit Batterie"\]\},</span>{d["EV-Preis"]},${d["FE-Preis"]}\n`;
+                    });
+
+                    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.setAttribute("href", url);
+                    link.setAttribute("download", `pv-anlage-wirtschaftlichkeit-${activeTab}.csv`);
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                };
+
+                return (
+                    React.createElement('div', { className: 'flex flex-col w-full space-y-6 bg-white p-6 rounded-lg shadow-md' },
+                        // Header
+                        React.createElement('header', { className: 'border-b pb-4' },
+                            React.createElement('h1', { className: 'text-2xl font-bold text-center text-gray-800' }, 'PV-Anlage Wirtschaftlichkeitsrechner'),
+                            React.createElement('p', { className: 'text-center text-gray-600' }, 'Vergleich CKW mit und ohne Batterie')
+                        ),
+
+                        // Szenario-Tabs
+                        React.createElement('div', { className: 'no-print' },
+                            React.createElement('div', { className: 'flex flex-wrap border-b border-gray-200' },
+                                Object.entries(scenarios).map(([key, scenario]) =>
+                                    React.createElement('button', {
+                                        key,
+                                        className: `px-4 py-2 font-medium rounded-t-lg ${activeTab === key ? 'tab-active' : 'tab-inactive'} mr-1 mb-1`,
+                                        onClick: () => setActiveTab(key)
+                                    }, scenario.name)
+                                )
+                            ),
+                            React.createElement('p', { className: 'mt-2 text-gray-600 italic' }, scenarios[activeTab].desc)
+                        ),
+
+                        // Vordefinierte Preisszenarien
+                        React.createElement('div', { className: 'p-4 border rounded-lg bg-gray-50 no-print' },
+                            React.createElement('h3', { className: 'text-lg font-semibold mb-3' }, 'Vordefinierte Preisentwicklungs-Szenarien'),
+                            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-5 gap-2' },
+                                priceScenarios.map((scenario, index) =>
+                                    React.createElement('button', {
+                                        key: index,
+                                        className: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors',
