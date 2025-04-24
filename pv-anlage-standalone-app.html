@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PV-Anlage Wirtschaftlichkeitsrechner</title>
+  
+  <!-- Recharts und React -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/17.0.2/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/17.0.2/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.7.2/prop-types.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.1.9/Recharts.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      padding: 0;
+      margin: 0;
+    }
+    .app-container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .slider-container {
+      display: flex;
+      align-items: center;
+    }
+    .slider-value {
+      width: 70px;
+      text-align: right;
+      font-weight: 500;
+    }
+    @media print {
+      body {
+        color: black;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="root" class="app-container"></div>
+
+  <script>
+    // Destrukturiere benötigte Komponenten aus Recharts
+    const {
+      LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, 
+      ResponsiveContainer, ReferenceLine
+    } = Recharts;
+    
+    // PV-Anlage Wirtschaftlichkeitsrechner App
+    function PVAnlageApp() {
+      // Daten für Szenario V3 (90% Produktion)
+      const v3Data = {
+        // CKW ohne Batterie
+        ckw: {
+          investitionNetto: 46350,
+          eigenverbrauch: 18693, // kWh
+          fremdeinspeisung: 11457, // kWh
+          eigenverbrauchsPreisInitial: 0.20, // CHF/kWh
+          fremdeinspeisungPreisInitial: 0.06, // CHF/kWh
+          jahreskosten: 1500, // CHF
+        },
+        // CKW mit Batterie
+        ckwBatterie: {
+          investitionNetto: 58050,
+          eigenverbrauch: 22462, // kWh
+          fremdeinspeisung: 7688, // kWh
+          eigenverbrauchsPreisInitial: 0.20, // CHF/kWh
+          fremdeinspeisungPreisInitial: 0.06, // CHF/kWh
+          jahreskosten: 1500, // CHF
+        }
+      };
+
+      // State für die vom Benutzer definierten Werte
+      const [eigenverbrauchsPreis, setEigenverbrauchsPreis] = React.useState(0.20);
+      const [fremdeinspeisungPreis, setFremdeinspeisungPreis] = React.useState(0.06);
+      const [eigenverbrauchsPreisAenderung, setEigenverbrauchsPreisAenderung] = React.useState(2.0);
+      const [fremdeinspeisungPreisAenderung, setFremdeinspeisungPreisAenderung] = React.useState(0.0);
+      const [daten, setDaten] = React.useState([]);
+      const [breakEvenJahre, setBreakEvenJahre] = React.useState({ ckw: null, ckwBatterie: null });
+      
+      // Berechne den kumulativen Ertrag über 15 Jahre
+      React.useEffect(() => {
+        function berechneKumulativenErtrag(option, jahre) {
+          const ergebnisse = [];
+          let kumulativerErtrag = -option.investitionNetto; // Startwert ist die negative Investition
+          
+          let eigenverbrauchsPreisCurrent = eigenverbrauchsPreis;
+          let fremdeinspeisungPreisCurrent = fremdeinspeisungPreis;
+          
+          for (let jahr = 0; jahr <= jahre; jahr++) {
+            // Im Jahr 0 gibt es nur die Investition
+            if (jahr === 0) {
+              ergebnisse.push({
+                jahr,
+                kumulativerErtrag,
+                eigenverbrauchsPreis: eigenverbrauchsPreisCurrent,
+                fremdeinspeisungPreis: fremdeinspeisungPreisCurrent
+              });
+              continue;
+            }
+            
+            // Preise für das nächste Jahr berechnen
+            eigenverbrauchsPreisCurrent = eigenverbrauchsPreisCurrent * (1 + eigenverbrauchsPreisAenderung / 100);
+            fremdeinspeisungPreisCurrent = fremdeinspeisungPreisCurrent * (1 + fremdeinspeisungPreisAenderung / 100);
+            
+            // Stelle sicher, dass Preise nicht negativ werden
+            fremdeinspeisungPreisCurrent = Math.max(0, fremdeinspeisungPreisCurrent);
+            
+            // Jahresertrag berechnen
+            const ertragEigenverbrauch = option.eigenverbrauch * eigenverbrauchsPreisCurrent;
+            const ertragFremdeinspeisung = option.fremdeinspeisung * fremdeinspeisungPreisCurrent;
+            const jahresertrag = ertragEigenverbrauch + ertragFremdeinspeisung - option.jahreskosten;
+            
+            // Kumulativen Ertrag aktualisieren
+            kumulativerErtrag += jahresertrag;
+            
+            ergebnisse.push({
+              jahr,
+              kumulativerErtrag,
+              eigenverbrauchsPreis: eigenverbrauchsPreisCurrent,
+              fremdeinspeisungPreis: fremdeinspeisungPreisCurrent,
+              jahresertrag
+            });
+          }
+          
+          return ergebnisse;
+        }
+
+        // Daten für beide Optionen berechnen
+        const ckwErgebnisse = berechneKumulativenErtrag(v3Data.ckw, 15);
+        const ckwBatterieErgebnisse = berechneKumulativenErtrag(v3Data.ckwBatterie, 15);
+
+        // Daten für das Diagramm formatieren
+        const formatierteDaten = [];
+        for (let i = 0; i <= 15; i++) {
+          formatierteDaten.push({
+            jahr: i,
+            "Ohne Batterie": Math.round(ckwErgebnisse[i].kumulativerErtrag),
+            "Mit Batterie": Math.round(ckwBatterieErgebnisse[i].kumulativerErtrag),
+            "EV-Preis": ckwErgebnisse[i].eigenverbrauchsPreis.toFixed(2),
+            "FE-Preis": ckwErgebnisse[i].fremdeinspeisungPreis.toFixed(2)
+          });
+        }
+
+        setDaten(formatierteDaten);
+
+        // Break-Even-Jahre berechnen
+        function findeBreakEvenJahr(daten) {
+          for (let i = 0; i < daten.length; i++) {
+            if (daten[i].kumulativerErtrag >= 0) {
+              if (i > 0) {
+                const vorherigJahr = daten[i-1];
+                const aktuellesJahr = daten[i];
+                const anteil = (0 - vorherigJahr.kumulativerErtrag) / (aktuellesJahr.kumulativerErtrag - vorherigJahr.kumulativerErtrag);
+                return (i-1) + anteil;
+              }
+              return i;
+            }
+          }
+          return null; // Kein Break-Even im untersuchten Zeitraum
+        }
+
+        setBreakEvenJahre({
+          ckw: findeBreakEvenJahr(ckwErgebnisse),
+          ckwBatterie: findeBreakEvenJahr(ckwBatterieErgebnisse)
+        });
+
+      }, [eigenverbrauchsPreis, fremdeinspeisungPreis, eigenverbrauchsPreisAenderung, fremdeinspeisungPreisAenderung]);
+
+      // Benutzerdefinierter Tooltip für das Diagramm
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (active && payload && payload.length) {
+          return (
+            React.createElement('div', { className: 'bg-white p-4 border border-gray-300 rounded shadow-md' },
+              React.createElement('p', { className: 'font-bold' }, `Jahr ${label}`),
+              React.createElement('p', null, `Eigenverbrauchspreis: ${payload[0].payload["EV-Preis"]} CHF/kWh`),
+              React.createElement('p', null, `Einspeisevergütung: ${payload[0].payload["FE-Preis"]} CHF/kWh`),
+              React.createElement('p', { className: 'text-blue-600' }, `Ohne Batterie: ${payload[0].value.toLocaleString()} CHF`),
+              payload[1] && React.createElement('p', { className: 'text-green-600' }, `Mit Batterie: ${payload[1].value.toLocaleString()} CHF`)
+            )
+          );
+        }
+        return null;
+      };
+
+      // Formatiert die Dezimalstellen für die Anzeige im Chart
+      const formatYAxis = (value) => {
+        return `${Math.round(value / 1000)}k`;
+      };
+
+      // Amortisationszeiten anzeigen
+      const zeigeAmortisationszeit = (jahre) => {
+        if (jahre === null) return "über 15 Jahre";
+        return `${jahre.toFixed(1)} Jahre`;
+      };
+
+      // Berechne den Vorteil der Batterie-Option
+      const berechneBatterieVorteil = () => {
+        if (breakEvenJahre.ckw !== null && breakEvenJahre.ckwBatterie !== null) {
+          const diff = breakEvenJahre.ckw - breakEvenJahre.ckwBatterie;
+          if (diff > 0) {
+            return `Die Batterie-Option amortisiert sich ${diff.toFixed(1)} Jahre schneller`;
+          } else if (diff < 0) {
+            return `Die Option ohne Batterie amortisiert sich ${Math.abs(diff).toFixed(1)} Jahre schneller`;
+          } else {
+            return "Beide Optionen haben die gleiche Amortisationszeit";
+          }
+        } else if (breakEvenJahre.ckw === null && breakEvenJahre.ckwBatterie !== null) {
+          return "Nur die Batterie-Option amortisiert sich innerhalb von 15 Jahren";
+        } else if (breakEvenJahre.ckw !== null && breakEvenJahre.ckwBatterie === null) {
+          return "Nur die Option ohne Batterie amortisiert sich innerhalb von 15 Jahren";
+        } else {
+          return "Keine der Optionen amortisiert sich innerhalb von 15 Jahren";
+        }
+      };
+
+      // Berechne den Ertrag nach 15 Jahren
+      const berechneErtragNach15Jahren = () => {
+        if (daten.length === 0) return { ohneBatterie: 0, mitBatterie: 0 };
+        return {
+          ohneBatterie: daten[15]["Ohne Batterie"],
+          mitBatterie: daten[15]["Mit Batterie"]
+        };
+      };
+
+      const ertragNach15Jahren = berechneErtragNach15Jahren();
+      
+      // Vordefinierte Szenarien
+      const szenarien = [
+        { name: "Stabile Preise", ev: 0.20, fe: 0.06, evAenderung: 0, feAenderung: 0 },
+        { name: "Moderate Steigerung", ev: 0.20, fe: 0.06, evAenderung: 3, feAenderung: 1 },
+        { name: "Starke Steigerung", ev: 0.20, fe: 0.06, evAenderung: 5, feAenderung: 2 },
+        { name: "Sinkende Einspeisevergütung", ev: 0.20, fe: 0.06, evAenderung: 4, feAenderung: -3 }
+      ];
+      
+      // Funktion zum Laden eines vordefinierten Szenarios
+      const ladeSzenario = (szenario) => {
+        setEigenverbrauchsPreis(szenario.ev);
+        setFremdeinspeisungPreis(szenario.fe);
+        setEigenverbrauchsPreisAenderung(szenario.evAenderung);
+        setFremdeinspeisungPreisAenderung(szenario.feAenderung);
+      };
+      
+      // Funktion zum Zurücksetzen der Werte
+      const resetInputs = () => {
+        setEigenverbrauchsPreis(0.20);
+        setFremdeinspeisungPreis(0.06);
+        setEigenverbrauchsPreisAenderung(2.0);
+        setFremdeinspeisungPreisAenderung(0.0);
+      };
+      
+      // Datentabelle für den Export
+      const erstelleExportDaten = () => {
+        let csvContent = "Jahr,Ohne Batterie (CHF),Mit Batterie (CHF),Eigenverbrauchspreis (CHF/kWh),Einspeisevergütung (CHF/kWh)\n";
+        
+        daten.forEach(d => {
+          csvContent += `${d.jahr},${d["Ohne Batterie"]},${d["Mit Batterie"]},${d["EV-Preis"]},${d["FE-Preis"]}\n`;
+        });
+        
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", "pv-anlage-wirtschaftlichkeit.csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      };
+
+      return (
+        React.createElement('div', { className: 'flex flex-col w-full space-y-6 bg-white p-6 rounded-lg shadow-md' },
+          // Header
+          React.createElement('header', { className: 'border-b pb-4' },
+            React.createElement('h1', { className: 'text-2xl font-bold text-center text-gray-800' }, 'PV-Anlage Wirtschaftlichkeitsrechner'),
+            React.createElement('p', { className: 'text-center text-gray-600' }, 'Szenario V3 (90% der maximalen Produktion)')
+          ),
+          
+          // Vordefinierte Szenarien
+          React.createElement('div', { className: 'p-4 border rounded-lg bg-gray-50' },
+            React.createElement('h3', { className: 'text-lg font-semibold mb-3' }, 'Vordefinierte Szenarien'),
+            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-4 gap-2' },
+              szenarien.map((szenario, index) => 
+                React.createElement('button', {
+                  key: index,
+                  className: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors',
+                  onClick: () => ladeSzenario(szenario)
+                }, szenario.name)
+              ),
+              React.createElement('button', {
+                className: 'px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors',
+                onClick: resetInputs
+              }, 'Zurücksetzen')
+            )
+          ),
+          
+          // Hauptcontainer
+          React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-6' },
+            // Einstellungen
+            React.createElement('div', { className: 'flex flex-col space-y-4 p-4 border rounded-lg bg-gray-50' },
+              React.createElement('h3', { className: 'text-lg font-semibold' }, 'Strompreiseinstellungen'),
+              
+              React.createElement('div', { className: 'space-y-4' },
+                // Eigenverbrauchspreis
+                React.createElement('label', { className: 'block' },
+                  'Eigenverbrauchspreis (aktuell):',
+                  React.createElement('div', { className: 'slider-container' },
+                    React.createElement('input', {
+                      type: 'range',
+                      min: '0.10',
+                      max: '0.50',
+                      step: '0.01',
+                      value: eigenverbrauchsPreis,
+                      onChange: (e) => setEigenverbrauchsPreis(parseFloat(e.target.value)),
+                      className: 'w-full mr-2'
+                    }),
+                    React.createElement('span', { className: 'slider-value' }, `${eigenverbrauchsPreis.toFixed(2)} CHF`)
+                  )
+                ),
+                
+                // Einspeisevergütung
+                React.createElement('label', { className: 'block' },
+                  'Einspeisevergütung (aktuell):',
+                  React.createElement('div', { className: 'slider-container' },
+                    React.createElement('input', {
+                      type: 'range',
+                      min: '0.00',
+                      max: '0.20',
+                      step: '0.01',
+                      value: fremdeinspeisungPreis,
+                      onChange: (e) => setFremdeinspeisungPreis(parseFloat(e.target.value)),
+                      className: 'w-full mr-2'
+                    }),
+                    React.createElement('span', { className: 'slider-value' }, `${fremdeinspeisungPreis.toFixed(2)} CHF`)
+                  )
+                ),
+                
+                // Jährliche Änderung Eigenverbrauchspreis
+                React.createElement('label', { className: 'block' },
+                  'Jährliche Änderung Eigenverbrauchspreis:',
+                  React.createElement('div', { className: 'slider-container' },
+                    React.createElement('input', {
+                      type: 'range',
+                      min: '-5',
+                      max: '10',
+                      step: '0.5',
+                      value: eigenverbrauchsPreisAenderung,
+                      onChange: (e) => setEigenverbrauchsPreisAenderung(parseFloat(e.target.value)),
+                      className: 'w-full mr-2'
+                    }),
+                    React.createElement('span', { className: 'slider-value' }, `${eigenverbrauchsPreisAenderung.toFixed(1)}%`)
+                  )
+                ),
+                
+                // Jährliche Änderung Einspeisevergütung
+                React.createElement('label', { className: 'block' },
+                  'Jährliche Änderung Einspeisevergütung:',
+                  React.createElement('div', { className: 'slider-container' },
+                    React.createElement('input', {
+                      type: 'range',
+                      min: '-10',
+                      max: '5',
+                      step: '0.5',
+                      value: fremdeinspeisungPreisAenderung,
+                      onChange: (e) => setFremdeinspeisungPreisAenderung(parseFloat(e.target.value)),
+                      className: 'w-full mr-2'
+                    }),
+                    React.createElement('span', { className: 'slider-value' }, `${fremdeinspeisungPreisAenderung.toFixed(1)}%`)
+                  )
+                )
+              )
+            ),
+            
+            // Ergebnisse
+            React.createElement('div', { className: 'flex flex-col space-y-4 p-4 border rounded-lg bg-gray-50' },
+              React.createElement('h3', { className: 'text-lg font-semibold' }, 'Ergebnisse'),
+              
+              React.createElement('div', { className: 'space-y-4' },
+                React.createElement('div', { className: 'grid grid-cols-2 gap-4' },
+                  React.createElement('div', null,
+                    React.createElement('p', { className: 'font-medium' }, 'Amortisationszeit'),
+                    React.createElement('p', { className: 'text-blue-600' }, `Ohne Batterie: ${zeigeAmortisationszeit(breakEvenJahre.ckw)}`),
+                    React.createElement('p', { className: 'text-green-600' }, `Mit Batterie: ${zeigeAmortisationszeit(breakEvenJahre.ckwBatterie)}`)
+                  ),
+                  
+                  React.createElement('div', null,
+                    React.createElement('p', { className: 'font-medium' }, 'Ertrag nach 15 Jahren'),
+                    React.createElement('p', { className: 'text-blue-600' }, `Ohne Batterie: ${ertragNach15Jahren.ohneBatterie.toLocaleString()} CHF`),
+                    React.createElement('p', { className: 'text-green-600' }, `Mit Batterie: ${ertragNach15Jahren.mitBatterie.toLocaleString()} CHF`)
+                  )
+                ),
+                
+                React.createElement('div', { className: 'mt-2 p-3 border border-gray-200 rounded-lg bg-white' },
+                  React.createElement('p', { className: 'font-medium' }, 'Fazit:'),
+                  React.createElement('p', null, berechneBatterieVorteil()),
+                  React.createElement('p', { className: 'mt-2' },
+                    ertragNach15Jahren.mitBatterie > ertragNach15Jahren.ohneBatterie
+                      ? `Die Batterie-Option hat nach 15 Jahren einen Vorteil von ${(ertragNach15Jahren.mitBatterie - ertragNach15Jahren.ohneBatterie).toLocaleString()} CHF`
+                      : ertragNach15Jahren.ohneBatterie > ertragNach15Jahren.mitBatterie
+                        ? `Die Option ohne Batterie hat nach 15 Jahren einen Vorteil von ${(ertragNach15Jahren.ohneBatterie - ertragNach15Jahren.mitBatterie).toLocaleString()} CHF`
+                        : "Beide Optionen haben nach 15 Jahren den gleichen Ertrag"
+                  )
+                ),
+                
+                // Buttons zum Exportieren der Daten
+                React.createElement('div', { className: 'mt-2' },
+                  React.createElement('button', {
+                    className: 'px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 transition-colors',
+                    onClick: erstelleExportDaten
+                  }, 'Daten als CSV exportieren'),
+                  
+                  React.createElement('button', {
+                    className: 'ml-2 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors',
+                    onClick: () => window.print()
+                  }, 'Drucken / PDF speichern')
+                )
+              )
+            )
+          ),
+          
+          // Diagramm
+          React.createElement('div', { className: 'mt-4 h-96 border p-4 rounded-lg bg-white' },
+            React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+              React.createElement(LineChart, {
+                data: daten,
+                margin: { top: 5, right: 30, left: 20, bottom: 5 }
+              },
+                React.createElement(CartesianGrid, { strokeDasharray: '3 3' }),
+                React.createElement(XAxis, { 
+                  dataKey: 'jahr',
+                  label: { value: 'Jahre', position: 'insideBottomRight', offset: -5 } 
+                }),
+                React.createElement(YAxis, { 
+                  tickFormatter: formatYAxis,
+                  label: { value: 'Kumulativer Ertrag (CHF)', angle: -90, position: 'insideLeft' } 
+                }),
+                React.createElement(Tooltip, { content: CustomTooltip }),
+                React.createElement(Legend),
+                React.createElement(ReferenceLine, { y: 0, stroke: '#000', strokeDasharray: '3 3' }),
+                React.createElement(Line, { 
+                  type: 'monotone',
+                  dataKey: 'Ohne Batterie',
+                  stroke: '#1f77b4',
+                  strokeWidth: 2,
+                  dot: { r: 1 },
+                  activeDot: { r: 6 }
+                }),
+                React.createElement(Line, { 
+                  type: 'monotone',
+                  dataKey: 'Mit Batterie',
+                  stroke: '#2ca02c',
+                  strokeWidth: 2,
+                  dot: { r: 1 },
+                  activeDot: { r: 6 }
+                })
+              )
+            )
+          ),
+          
+          // Zusätzliche Informationen
+          React.createElement('div', { className: 'p-4 border rounded-lg bg-gray-50' },
+            React.createElement('h3', { className: 'text-lg font-semibold mb-2' }, 'Produktionsannahmen Szenario V3'),
+            React.createElement('p', null, '90% der maximalen Kilowatt-Peak Produktion'),
+            
+            React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-2 gap-4 mt-4' },
+              React.createElement('div', null,
+                React.createElement('h4', { className: 'font-medium' }, 'CKW ohne Batterie:'),
+                React.createElement('ul', { className: 'list-disc pl-5' },
+                  React.createElement('li', null, 'Investition netto: 46\'350 CHF'),
+                  React.createElement('li', null, 'Eigenverbrauch: 18\'693 kWh (62%)'),
+                  React.createElement('li', null, 'Fremdeinspeisung: 11\'457 kWh (38%)'),
+                  React.createElement('li', null, 'Jahreskosten: 1\'500 CHF')
+                )
+              ),
+              
+              React.createElement('div', null,
+                React.createElement('h4', { className: 'font-medium' }, 'CKW mit Batterie:'),
+                React.createElement('ul', { className: 'list-disc pl-5' },
+                  React.createElement('li', null, 'Investition netto: 58\'050 CHF'),
+                  React.createElement('li', null, 'Eigenverbrauch: 22\'462 kWh (74.5%)'),
+                  React.createElement('li', null, 'Fremdeinspeisung: 7\'688 kWh (25.5%)'),
+                  React.createElement('li', null, 'Jahreskosten: 1\'500 CHF')
+                )
+              )
+            )
+          ),
+          
+          // Footer
+          React.createElement('footer', { className: 'text-center text-gray-500 text-sm mt-6' },
+            'PV-Anlage Wirtschaftlichkeitsrechner - Szenario V3 basierend auf CKW-Offerten 2025'
+          )
+        )
+      );
+    }
+
+    // App in DOM rendern
+    ReactDOM.render(
+      React.createElement(PVAnlageApp), 
+      document.getElementById('root')
+    );
+  </script>
+</body>
+</html>
